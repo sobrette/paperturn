@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Paperturn</title>
+  <meta name="description" content="Turn PDFs into flipbooks and keep them on a personal bookshelf. Your files never leave your device.">
+  <meta name="theme-color" content="#f4ecdc">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M8 14c8-4 16-4 24 2v38c-8-6-16-6-24-2z' fill='%232f5d46'/%3E%3Cpath d='M56 14c-8-4-16-4-24 2v38c8-6 16-6 24-2z' fill='%23c8962e'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=Inter:wght@500;600&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ============ Shelf ============ -->
+  <main id="shelf-view" class="view">
+    <header class="masthead">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M8 14c8-4 16-4 24 2v38c-8-6-16-6-24-2z" fill="currentColor"/><path d="M56 14c-8-4-16-4-24 2v38c8-6 16-6 24-2z" fill="#c8962e"/></svg>
+        <h1>Paperturn</h1>
+      </div>
+      <button class="btn btn-primary" id="add-btn" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        Add PDF
+      </button>
+      <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden>
+    </header>
+
+    <section class="intro">
+      <p class="kicker">Your library</p>
+      <h2>Every PDF, a book you can turn.</h2>
+      <p class="lede">Drop a PDF anywhere on this page or use <em>Add PDF</em>. It opens as a flipbook and stays on your shelf, stored only on this device.</p>
+    </section>
+
+    <section class="bookcase-wrap" aria-labelledby="shelf-heading">
+      <div class="shelf-meta">
+        <h3 id="shelf-heading">On the shelf</h3>
+        <span id="shelf-count" class="count"></span>
+      </div>
+      <div class="bookcase" id="bookcase">
+        <div class="bookcase-crown" aria-hidden="true"></div>
+        <div class="bookcase-body" id="shelves" role="list" aria-label="Books"></div>
+        <div class="bookcase-plinth" aria-hidden="true"></div>
+      </div>
+      <p class="hint">Tip: select a spine and press Enter to open it.</p>
+    </section>
+
+    <footer class="foot">Files stay in your browser’s storage. Nothing is uploaded.</footer>
+  </main>
+
+  <!-- ============ Reader ============ -->
+  <section id="reader-view" class="view reader" hidden aria-label="Reader">
+    <div class="reader-bar">
+      <button class="btn btn-ghost" id="back-btn" type="button" aria-label="Back to shelf">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="label">Shelf</span>
+      </button>
+      <h2 class="reader-title" id="reader-title"></h2>
+      <div class="reader-tools">
+        <button class="icon-btn" id="motion-btn" type="button" aria-pressed="false" title="Reduce motion">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12c3-6 5-6 8 0s5 6 8 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span class="sr-only">Reduce motion</span>
+        </button>
+        <button class="icon-btn" id="fs-btn" type="button" title="Fullscreen (F)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fs-enter" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path class="fs-exit" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="sr-only">Toggle fullscreen</span>
+        </button>
+        <button class="icon-btn" id="more-btn" type="button" title="Book options" aria-haspopup="menu" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>
+          <span class="sr-only">Book options</span>
+        </button>
+        <div class="menu" id="more-menu" role="menu" hidden>
+          <button role="menuitem" type="button" id="rename-btn">Rename</button>
+          <button role="menuitem" type="button" id="remove-btn" class="danger">Remove from shelf</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="reader-stage" id="reader-stage">
+      <div class="loading" id="reader-loading"><span class="spinner" aria-hidden="true"></span><span>Opening…</span></div>
+    </div>
+
+    <div class="reader-controls">
+      <button class="nav-btn" id="prev-btn" type="button" aria-label="Previous page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="scrub">
+        <input type="range" id="page-range" min="1" max="1" value="1" aria-label="Go to page">
+        <output id="page-label" aria-live="polite">–</output>
+      </div>
+      <button class="nav-btn" id="next-btn" type="button" aria-label="Next page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </section>
+
+  <div class="drop-overlay" id="drop-overlay" hidden aria-hidden="true">
+    <div class="drop-card">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M8 14c8-4 16-4 24 2v38c-8-6-16-6-24-2z" fill="#2f5d46"/><path d="M56 14c-8-4-16-4-24 2v38c8-6 16-6 24-2z" fill="#c8962e"/></svg>
+      <p>Drop to shelve your PDF</p>
+    </div>
+  </div>
+
+  <dialog id="dialog" class="dialog">
+    <form method="dialog" id="dialog-form">
+      <h3 id="dialog-title"></h3>
+      <p id="dialog-text"></p>
+      <label id="dialog-field" class="field" hidden>
+        <span>Title</span>
+        <input type="text" id="dialog-input" maxlength="120" autocomplete="off">
+      </label>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" value="cancel" type="submit" formnovalidate>Cancel</button>
+        <button class="btn btn-primary" value="ok" type="submit" id="dialog-ok">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
