@@ -90,6 +90,9 @@ export class Flipbook {
     this.flap.canvas = el('', this.flap, 'canvas');
     this.flapBar = el('fb-bar fb-bar-flap', this.flap);
     this.flapGloss = el('fb-bar fb-bar-gloss', this.flap);
+    this.ribbonL = el('fb-ribbon fb-ribbon-l', this.book);
+    this.ribbonR = el('fb-ribbon fb-ribbon-r', this.book);
+    this.marks = new Set();
 
     this.book.addEventListener('pointerdown', e => this.onDown(e));
     this.book.addEventListener('pointermove', e => this.onMove(e));
@@ -240,6 +243,8 @@ export class Flipbook {
     const shift = this.spread && !v.left ? -this.W / 2 : this.spread && !v.right ? this.W / 2 : 0;
     this.book.style.transform = shift ? `translateX(${shift}px)` : '';
     this.updateEdges();
+    this.book.classList.remove('hide-l', 'hide-r', 'hide-all');
+    this.updateRibbons();
     this.book.setAttribute('aria-label', this.label());
     this.prefetch();
     this.onChange(this.state());
@@ -295,6 +300,8 @@ export class Flipbook {
     this.underShade.style.display = t.under ? '' : 'none';
     this.gutter.style.display = this.spread && t.staticLeft ? '' : 'none';
     [t.front, t.back, t.under].forEach(p => this.ensure(p));
+    // the ribbon on the sheet being turned is hidden while it moves
+    this.book.classList.add(!this.spread ? 'hide-all' : dir === 'next' ? 'hide-r' : 'hide-l');
     this.turn = t;
     this.setP(t.P);
     return t;
@@ -441,6 +448,7 @@ export class Flipbook {
     const t = this.beginTurn(dir, 'bottom');
     if (!t) return;
     t.auto = true;
+    this.book.classList.add('hide-all');
     if (t.mode !== 'reverse') this.setP({ x: t.C.x - this.W * 0.04, y: t.C.y - this.H * 0.02 });
     this.settle(true, true);
   }
@@ -459,6 +467,33 @@ export class Flipbook {
   }
   setReducedMotion(v) { this.reducedMotion = v; }
 
+  // ---------- bookmarks ----------
+  setMarks(marks) {
+    this.marks = new Set(marks);
+    this.updateRibbons();
+  }
+  updateRibbons() {
+    const v = this.view(), W = this.W;
+    const left = this.spread && v.left && this.marks.has(v.left);
+    const right = v.right && this.marks.has(v.right);
+    this.ribbonL.classList.toggle('on', !!left);
+    this.ribbonR.classList.toggle('on', !!right);
+    this.ribbonL.style.left = Math.round(W * 0.1) + 'px';
+    this.ribbonR.style.left = Math.round((this.spread ? 2 * W : W) - W * 0.1 - 22) + 'px';
+    this.ribbonL.style.height = this.ribbonR.style.height = Math.round(this.H * 0.17) + 'px';
+  }
+
+  /** Abandons any drag or turn in progress, e.g. when a pinch begins. */
+  cancelInteraction() {
+    if (this.drag) {
+      try { this.book.releasePointerCapture(this.drag.id); } catch {}
+      this.drag = null;
+      this.root.classList.remove('fb-dragging');
+    }
+    this.queue = [];
+    if (this.turn) this.finishTurnNow(false);
+  }
+
   // ---------- pointer ----------
   toNorm(e, mirror) {
     const r = this.stage.getBoundingClientRect();
@@ -469,6 +504,7 @@ export class Flipbook {
 
   onDown(e) {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (this.drag && e.pointerId !== this.drag.id) { this.cancelInteraction(); return; }
     if (this.turn && (this.turn.auto || this.turn.settling)) this.finishTurnNow(this.turn.settling !== 'cancel');
     const p = this.toNorm(e, false);
     this.drag = { id: e.pointerId, start: p, startTime: performance.now(), last: [], started: false, type: e.pointerType };
@@ -486,6 +522,7 @@ export class Flipbook {
   startDrag(e) {
     const t = this.turn, d = this.drag;
     d.started = true;
+    this.book.classList.add('hide-all');
     d.origin = this.toNorm(e, t.mode === 'mirror');
     // corner lifts first: a small initial curl, then the fold follows the drag
     const base = t.mode === 'reverse' ? t.cancelP : t.C;

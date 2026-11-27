@@ -1,6 +1,7 @@
 import * as pdfjs from '../vendor/pdf.min.mjs';
 import * as db from './db.js';
 import { Flipbook } from './flipbook.js';
+import { ZoomView } from './zoom.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('../vendor/pdf.worker.min.mjs', import.meta.url).href;
 const PDF_OPTS = {
@@ -59,6 +60,12 @@ function toast(msg, kind = '') {
   requestAnimationFrame(() => t.classList.add('in'));
   setTimeout(() => { t.classList.remove('in'); setTimeout(() => t.remove(), 300); }, 3200);
 }
+function readSampleMarks() {
+  try { return JSON.parse(localStorage.getItem('paperturn.sampleBookmarks') || '[]'); } catch { return []; }
+}
+const clampZoom = z => Math.min(ZOOM_MAX, Math.max(1, z));
+const ZOOM_MAX = 4;
+const ZOOM_STEPS = [1, 1.25, 1.5, 2, 2.5, 3, 4];
 function readMotionPref() {
   try {
     const v = localStorage.getItem('paperturn.reducedMotion');
@@ -98,6 +105,11 @@ function makeSpine(book) {
   b.title = book.title;
   b.innerHTML = `<span class="spine-top"></span><span class="spine-title"></span><span class="spine-foot">${book.sample ? 'Sample' : (book.pageCount || '')}</span>`;
   b.querySelector('.spine-title').textContent = book.title;
+  const marks = book.sample ? readSampleMarks() : book.bookmarks || [];
+  if (marks.length) {
+    b.insertAdjacentHTML('beforeend', '<span class="spine-ribbon" aria-hidden="true"></span>');
+    b.setAttribute('aria-label', b.getAttribute('aria-label') + `, ${marks.length} bookmark${marks.length === 1 ? '' : 's'}`);
+  }
   b.addEventListener('click', () => openBook(book.id));
   b._w = look.width;
   return b;
@@ -273,7 +285,10 @@ async function openBook(id, preload) {
   showReader();
   $('#reader-title').textContent = meta.title;
   $('#reader-loading').hidden = false;
-  $('#more-btn').hidden = isSample;
+  $('#rename-btn').hidden = $('#remove-btn').hidden = $('#menu-sep').hidden = isSample;
+  current.marks = new Set(isSample ? readSampleMarks() : meta.bookmarks || []);
+  current.zoom = 1;
+  updateZoomUI();
   try {
     let pdf = preload && preload.pdf;
     if (!pdf) {
@@ -302,6 +317,13 @@ async function openBook(id, preload) {
     });
     current.pdf = pdf;
     current.flip = flip;
+    current.zv = new ZoomView(stage, {
+      pdf,
+      getPreview: p => flip.cache.get(p),
+      onDoubleClick: () => setZoom(1),
+    });
+    flip.setMarks(current.marks);
+    refreshMarks();
     if (!isSample && meta.pageCount !== pdf.numPages) { meta.pageCount = pdf.numPages; db.updateBook(id, { pageCount: pdf.numPages }).catch(() => {}); }
     if (!isSample) db.updateBook(id, { lastOpened: Date.now() }).catch(() => {});
   } catch (err) {
@@ -320,6 +342,7 @@ function onPageChange(s) {
   $('#page-range').style.setProperty('--fill', ((s.first - 1) / Math.max(1, s.total - 1)) * 100 + '%');
   $('#prev-btn').disabled = !s.canPrev;
   $('#next-btn').disabled = !s.canNext;
+  if (current) { refreshMarkButton(s); if (current.zoom > 1 && current.zv) current.zv.update(zoomState()); }
   if (current && !current.meta.sample) {
     current.meta.lastPage = s.first;
     clearTimeout(saveTimer);
@@ -339,6 +362,9 @@ function showReader() {
 function closeBook(toShelf = true) {
   if (current) {
     current.flip && current.flip.destroy();
+    current.zv && current.zv.destroy();
+    $('#reader-stage').classList.remove('zoomed');
+    setMarksPanel(false);
     current.pdf && current.pdf.destroy();
     $('#reader-stage').querySelectorAll('.fb-host').forEach(n => n.remove());
     const id = current.meta.id;
@@ -366,18 +392,168 @@ function backToShelf() {
 window.addEventListener('popstate', () => { if (current || !$('#reader-view').hidden) closeBook(); });
 
 $('#back-btn').addEventListener('click', backToShelf);
-$('#prev-btn').addEventListener('click', () => current?.flip?.prev());
-$('#next-btn').addEventListener('click', () => current?.flip?.next());
+$('#prev-btn').addEventListener('click', () => turn('prev'));
+$('#next-btn').addEventListener('click', () => turn('next'));
+
+/** Page turns: animated in the flipbook, instant while zoomed in. */
+function turn(dir) {
+  const f = current?.flip;
+  if (!f) return;
+  if (current.zoom > 1) {
+    const s = f.state();
+    if (dir === 'next' ? s.canNext : s.canPrev) f.goTo(dir === 'next' ? s.last + 1 : s.first - 1);
+  } else dir === 'next' ? f.next() : f.prev();
+}
+
+// ---------------------------------------------------------------- bookmarks
+function refreshMarkButton(s = current?.flip?.state()) {
+  if (!current || !s) return;
+  const on = s.pages.filter(p => current.marks.has(p));
+  const btn = $('#mark-btn');
+  btn.setAttribute('aria-pressed', String(on.length > 0));
+  const text = on.length ? `Remove bookmark from page ${on.join(' and ')}` : `Bookmark page ${s.first}`;
+  $('#mark-btn-label').textContent = text;
+  btn.title = text + ' (B)';
+}
+function refreshMarks() {
+  if (!current) return;
+  const marks = [...current.marks].sort((a, b) => a - b);
+  current.flip?.setMarks(current.marks);
+  if (current.zoom > 1) current.zv?.update(zoomState());
+  refreshMarkButton();
+  const badge = $('#marks-count');
+  badge.hidden = !marks.length;
+  badge.textContent = marks.length;
+  const list = $('#marks-list');
+  list.innerHTML = '';
+  $('#marks-empty').hidden = marks.length > 0;
+  for (const p of marks) {
+    const li = document.createElement('li');
+    li.innerHTML = `<button type="button" class="mark-go"><span class="mark-dot" aria-hidden="true"></span>Page ${p}</button>
+      <button type="button" class="mark-del" aria-label="Remove bookmark on page ${p}" title="Remove">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>`;
+    li.querySelector('.mark-go').addEventListener('click', () => { current.flip.goTo(p); setMarksPanel(false); });
+    li.querySelector('.mark-del').addEventListener('click', e => {
+      e.stopPropagation();
+      current.marks.delete(p);
+      saveMarks();
+      refreshMarks();
+      (list.querySelector('.mark-go') || $('#marks-btn')).focus();
+    });
+    list.appendChild(li);
+  }
+}
+function saveMarks() {
+  const arr = [...current.marks].sort((a, b) => a - b);
+  if (current.meta.sample) {
+    try { localStorage.setItem('paperturn.sampleBookmarks', JSON.stringify(arr)); } catch {}
+  } else {
+    current.meta.bookmarks = arr;
+    db.updateBook(current.meta.id, { bookmarks: arr }).catch(() => toast('Couldn’t save the bookmark.', 'warn'));
+  }
+}
+function toggleBookmark() {
+  const f = current?.flip;
+  if (!f) return;
+  const s = f.state();
+  const on = s.pages.filter(p => current.marks.has(p));
+  if (on.length) {
+    on.forEach(p => current.marks.delete(p));
+    toast(`Removed bookmark from page ${on.join(' and ')}.`);
+  } else {
+    current.marks.add(s.first);
+    toast(`Bookmarked page ${s.first}.`);
+  }
+  saveMarks();
+  refreshMarks();
+}
+$('#mark-btn').addEventListener('click', toggleBookmark);
+
+const marksPanel = $('#marks-panel');
+marksPanel.tabIndex = -1;
+function setMarksPanel(open) {
+  marksPanel.hidden = !open;
+  $('#marks-btn').setAttribute('aria-expanded', String(open));
+  if (open) (marksPanel.querySelector('.mark-go') || marksPanel).focus?.();
+}
+$('#marks-btn').addEventListener('click', e => { e.stopPropagation(); setMenu(false); setMarksPanel(marksPanel.hidden); });
+document.addEventListener('click', e => { if (!marksPanel.hidden && !marksPanel.contains(e.target)) setMarksPanel(false); });
+
+// ---------------------------------------------------------------- zoom
+function zoomState() {
+  const f = current.flip;
+  return { pages: f.state().pages, W: f.W, H: f.H, z: current.zoom, marks: current.marks };
+}
+function setZoom(z, anchor) {
+  if (!current?.flip || !current.zv) return;
+  z = Math.round(clampZoom(z) * 100) / 100;
+  if (z < 1.03) z = 1;
+  const was = current.zoom;
+  if (z === was) return;
+  current.zoom = z;
+  const stage = $('#reader-stage');
+  if (z > 1) {
+    current.flip.cancelInteraction();
+    if (was === 1) current.zv.update({ ...zoomState(), z: 1 }); // start from the book's own size, then grow
+    stage.classList.add('zoomed');
+    current.zv.update(zoomState(), anchor);
+  } else {
+    current.zv.hide();
+    stage.classList.remove('zoomed');
+  }
+  updateZoomUI();
+}
+function zoomStep(dir) {
+  if (!current) return;
+  const z = current.zoom;
+  const next = dir > 0 ? ZOOM_STEPS.find(s => s > z + 0.01) : [...ZOOM_STEPS].reverse().find(s => s < z - 0.01);
+  setZoom(next ?? (dir > 0 ? ZOOM_MAX : 1));
+}
+function updateZoomUI() {
+  const z = current?.zoom || 1;
+  $('#zoom-reset').textContent = Math.round(z * 100) + '%';
+  $('#zoom-out').disabled = z <= 1;
+  $('#zoom-in').disabled = z >= ZOOM_MAX;
+  $('#zoom-reset').disabled = z === 1;
+}
+$('#zoom-in').addEventListener('click', () => zoomStep(1));
+$('#zoom-out').addEventListener('click', () => zoomStep(-1));
+$('#zoom-reset').addEventListener('click', () => setZoom(1));
+
+// trackpad pinch and Ctrl/⌘ + wheel
+$('#reader-stage').addEventListener('wheel', e => {
+  if (!current?.flip || !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  setZoom(current.zoom * Math.exp(-e.deltaY * 0.0035), { x: e.clientX, y: e.clientY });
+}, { passive: false });
+
+// two-finger pinch on touch screens
+let pinch = null;
+const touchDist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+const touchMid = t => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+$('#reader-stage').addEventListener('touchstart', e => {
+  if (!current?.flip || e.touches.length !== 2) return;
+  e.preventDefault();
+  current.flip.cancelInteraction();
+  pinch = { d0: touchDist(e.touches), z0: current.zoom };
+}, { passive: false });
+$('#reader-stage').addEventListener('touchmove', e => {
+  if (!pinch || e.touches.length !== 2) return;
+  e.preventDefault();
+  setZoom(pinch.z0 * touchDist(e.touches) / pinch.d0, touchMid(e.touches));
+}, { passive: false });
+$('#reader-stage').addEventListener('touchend', e => { if (e.touches.length < 2) pinch = null; });
+$('#reader-stage').addEventListener('touchcancel', () => { pinch = null; });
 $('#page-range').addEventListener('input', e => current?.flip?.goTo(+e.target.value));
 
 // motion
 function applyMotion() {
-  $('#motion-btn').setAttribute('aria-pressed', String(reducedMotion));
-  $('#motion-btn').title = reducedMotion ? 'Reduced motion is on' : 'Reduce motion';
+  $('#motion-btn').setAttribute('aria-checked', String(reducedMotion));
   document.documentElement.classList.toggle('reduce-motion', reducedMotion);
   current?.flip?.setReducedMotion(reducedMotion);
 }
 $('#motion-btn').addEventListener('click', () => {
+  setMenu(false);
   reducedMotion = !reducedMotion;
   try { localStorage.setItem('paperturn.reducedMotion', reducedMotion ? '1' : '0'); } catch {}
   applyMotion();
@@ -402,9 +578,9 @@ const menu = $('#more-menu');
 function setMenu(open) {
   menu.hidden = !open;
   $('#more-btn').setAttribute('aria-expanded', String(open));
-  if (open) menu.querySelector('button').focus();
+  if (open) menu.querySelector('button:not([hidden])').focus();
 }
-$('#more-btn').addEventListener('click', e => { e.stopPropagation(); setMenu(menu.hidden); });
+$('#more-btn').addEventListener('click', e => { e.stopPropagation(); setMarksPanel(false); setMenu(menu.hidden); });
 document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) setMenu(false); });
 
 function ask({ title, text = '', field = null, ok = 'Save', danger = false }) {
@@ -448,18 +624,30 @@ $('#remove-btn').addEventListener('click', async () => {
 document.addEventListener('keydown', e => {
   if (!current || !current.flip || $('#reader-view').hidden) return;
   if ($('#dialog').open || e.target.closest?.('input[type=text], .menu')) return;
+  if (e.key === 'Escape' && !marksPanel.hidden) { setMarksPanel(false); $('#marks-btn').focus(); return; }
+  if ((e.metaKey || e.ctrlKey) && ['=', '+', '-', '0'].includes(e.key)) {
+    // keep browser page-zoom shortcuts working on the book instead
+    e.preventDefault();
+    e.key === '0' ? setZoom(1) : zoomStep(e.key === '-' ? -1 : 1);
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const f = current.flip;
   const onRange = e.target.id === 'page-range';
   switch (e.key) {
-    case 'ArrowRight': case 'PageDown': if (onRange) return; e.preventDefault(); f.next(); break;
-    case 'ArrowLeft': case 'PageUp': if (onRange) return; e.preventDefault(); f.prev(); break;
-    case ' ': if (e.target.closest('button')) return; e.preventDefault(); e.shiftKey ? f.prev() : f.next(); break;
+    case 'ArrowRight': case 'PageDown': if (onRange) return; e.preventDefault(); turn('next'); break;
+    case 'ArrowLeft': case 'PageUp': if (onRange) return; e.preventDefault(); turn('prev'); break;
+    case ' ': if (e.target.closest('button') || current.zoom > 1) return; e.preventDefault(); e.shiftKey ? f.prev() : f.next(); break;
+    case 'b': case 'B': e.preventDefault(); toggleBookmark(); break;
+    case '+': case '=': e.preventDefault(); zoomStep(1); break;
+    case '-': case '_': e.preventDefault(); zoomStep(-1); break;
+    case '0': e.preventDefault(); setZoom(1); break;
     case 'Home': if (onRange) return; e.preventDefault(); f.goTo(1); break;
     case 'End': if (onRange) return; e.preventDefault(); f.goTo(f.n); break;
     case 'f': case 'F': e.preventDefault(); toggleFullscreen(); break;
     case 'Escape':
       if (!menu.hidden) { setMenu(false); $('#more-btn').focus(); break; }
+      if (current.zoom > 1) { setZoom(1); break; }
       if (!document.fullscreenElement) backToShelf();
       break;
   }
